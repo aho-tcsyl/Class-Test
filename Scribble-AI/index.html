@@ -210,12 +210,10 @@
           </div>
 
           <div class="form-group">
-            <label for="authTokenInput">NYU Auth Token <span class="badge-optional">Optional</span></label>
-            <input type="password" id="authTokenInput" placeholder="Paste your bearer token here if you logged into the proxy" />
+            <label for="authTokenInput">API Bearer Token <span class="badge-optional">Optional</span></label>
+            <input type="text" id="authTokenInput" autocomplete="off" spellcheck="false" placeholder="Optional proxy bearer token" />
             <span class="help-text">
-              Leave blank to use the shared student quota. Or log in at 
-              <a href="https://itp-ima-replicate-proxy.web.app/" target="_blank" rel="noopener">itp-ima-replicate-proxy.web.app</a>
-              with your <code>nyu.edu</code> account and paste your token for up to 500 requests/day.
+              Leave blank for default shared quota, or supply an API token for extended quotas.
             </span>
           </div>
 
