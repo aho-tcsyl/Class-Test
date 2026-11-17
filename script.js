@@ -1,633 +1,685 @@
 /**
- * Bouncing Ball Physics Simulation
- * Features:
- * - 2D physics integration (Euler method)
- * - Elastic boundary collisions with restitution
- * - 2-body elastic ball-on-ball collisions with mass & momentum conservation
- * - Slingshot drag-and-launch mechanism
- * - Web Audio API procedural bounce sound synthesis
- * - High-DPI Canvas support & Motion trails
+ * Scribble to Image AI • Google Nano Banana
+ * -----------------------------------------
+ * Front-end drawing studio & inference client for `google/nano-banana`
+ * hosted via Replicate and routed through the NYU ITP/IMA Replicate Proxy.
+ *
+ * https://replicate.com/google/nano-banana
+ * https://itp-ima-replicate-proxy.web.app/
  */
 
-// --- Canvas & Audio Setup ---
-const canvas = document.getElementById('simCanvas');
-const ctx = canvas.getContext('2d');
-
-let audioCtx = null;
-function getAudioContext() {
-  if (!audioCtx) {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (AudioContext) {
-      audioCtx = new AudioContext();
-    }
-  }
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume();
-  }
-  return audioCtx;
-}
-
-// Play procedural bounce sound based on impact velocity and ball size
-function playBounceSound(speed, radius) {
-  if (!controls.sound.checked) return;
-  try {
-    const actx = getAudioContext();
-    if (!actx) return;
-
-    const osc = actx.createOscillator();
-    const gain = actx.createGain();
-
-    // Larger balls produce deeper pitch, smaller balls higher pitch
-    const baseFreq = Math.max(90, 500 - radius * 7);
-    // Harder impact produces slightly brighter pitch
-    const impactMod = Math.min(speed * 12, 180);
-    const freq = baseFreq + impactMod;
-
-    // Volume scales with impact speed (clamped)
-    const volume = Math.min(Math.max((speed / 25) * 0.15, 0.01), 0.25);
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, actx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq * 0.4), actx.currentTime + 0.08);
-
-    gain.gain.setValueAtTime(volume, actx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.08);
-
-    osc.connect(gain);
-    gain.connect(actx.destination);
-
-    osc.start();
-    osc.stop(actx.currentTime + 0.09);
-  } catch (e) {
-    // Ignore audio autoplay restrictions
-  }
-}
-
-// --- DOM Controls ---
-const controls = {
-  gravity: document.getElementById('gravity'),
-  gravityVal: document.getElementById('gravityVal'),
-  restitution: document.getElementById('restitution'),
-  restitutionVal: document.getElementById('restitutionVal'),
-  friction: document.getElementById('friction'),
-  frictionVal: document.getElementById('frictionVal'),
-  ballRadius: document.getElementById('ballRadius'),
-  ballRadiusVal: document.getElementById('ballRadiusVal'),
-  trail: document.getElementById('trailToggle'),
-  collision: document.getElementById('collisionToggle'),
-  sound: document.getElementById('soundToggle'),
-  addBallBtn: document.getElementById('addBallBtn'),
-  burstBtn: document.getElementById('burstBtn'),
-  clearBtn: document.getElementById('clearBtn'),
-  ballCountBadge: document.getElementById('ballCountBadge'),
-  fpsBadge: document.getElementById('fpsBadge'),
-  presetButtons: document.querySelectorAll('.btn-preset')
+// --- Settings & State ---
+const DEFAULT_SETTINGS = {
+  proxyUrl: 'https://itp-ima-replicate-proxy.web.app/api/create_n_get',
+  model: 'google/nano-banana',
+  authToken: '',
+  outputFormat: 'png',
+  aspectRatio: '1:1'
 };
 
-// Update label helper
-function updateControlLabels() {
-  controls.gravityVal.textContent = parseFloat(controls.gravity.value).toFixed(2);
-  controls.restitutionVal.textContent = parseFloat(controls.restitution.value).toFixed(2);
-  controls.frictionVal.textContent = parseFloat(controls.friction.value).toFixed(3);
-  controls.ballRadiusVal.textContent = `${controls.ballRadius.value} px`;
+let settings = { ...DEFAULT_SETTINGS };
+
+// Load settings from localStorage
+try {
+  const saved = localStorage.getItem('nano_banana_settings');
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    settings = { ...DEFAULT_SETTINGS, ...parsed };
+    if (!settings.model) settings.model = DEFAULT_SETTINGS.model;
+  }
+} catch (e) {
+  console.warn('Could not read settings from localStorage', e);
 }
 
-['gravity', 'restitution', 'friction', 'ballRadius'].forEach((id) => {
-  controls[id].addEventListener('input', updateControlLabels);
-});
-updateControlLabels();
+// --- DOM Elements ---
+const canvas = document.getElementById('paintCanvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const canvasOverlayHint = document.getElementById('canvasOverlayHint');
 
-// --- Responsive Canvas Resizing ---
-let canvasWidth = 0;
-let canvasHeight = 0;
-let dpr = window.devicePixelRatio || 1;
+const undoBtn = document.getElementById('undoBtn');
+const clearBtn = document.getElementById('clearBtn');
+const penTool = document.getElementById('penTool');
+const eraserTool = document.getElementById('eraserTool');
+const brushSizeSlider = document.getElementById('brushSize');
+const brushSizeVal = document.getElementById('brushSizeVal');
+const colorModeBtn = document.getElementById('colorModeBtn');
+const customColorPicker = document.getElementById('customColorPicker');
+const promptInput = document.getElementById('promptInput');
+const generateBtn = document.getElementById('generateBtn');
 
-function resizeCanvas() {
+// Result Panel Elements
+const resultActions = document.getElementById('resultActions');
+const toggleCompareBtn = document.getElementById('toggleCompareBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const copyToCanvasBtn = document.getElementById('copyToCanvasBtn');
+
+// Result States
+const emptyState = document.getElementById('emptyState');
+const loadingState = document.getElementById('loadingState');
+const imageState = document.getElementById('imageState');
+const errorState = document.getElementById('errorState');
+const generatedImg = document.getElementById('generatedImg');
+const sketchCompareImg = document.getElementById('sketchCompareImg');
+const captionPrompt = document.getElementById('captionPrompt');
+const loadingStatusText = document.getElementById('loadingStatusText');
+const timerDisplay = document.getElementById('timerDisplay');
+const errorTitle = document.getElementById('errorTitle');
+const errorMessage = document.getElementById('errorMessage');
+const errorRetryBtn = document.getElementById('errorRetryBtn');
+const historyGrid = document.getElementById('historyGrid');
+const historyCount = document.getElementById('historyCount');
+
+// Settings Modal Elements
+const settingsModal = document.getElementById('settingsModal');
+const openSettingsBtn = document.getElementById('openSettingsBtn');
+const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+const resetSettingsBtn = document.getElementById('resetSettingsBtn');
+const proxyUrlInput = document.getElementById('proxyUrlInput');
+const modelInput = document.getElementById('modelInput');
+const authTokenInput = document.getElementById('authTokenInput');
+const outputFormatSelect = document.getElementById('outputFormatSelect');
+const aspectRatioSelect = document.getElementById('aspectRatioSelect');
+
+// --- Drawing Engine State ---
+let isDrawing = false;
+let currentTool = 'pen'; // 'pen' or 'eraser'
+let currentColor = '#000000';
+let currentBgColor = '#ffffff';
+let brushSize = parseInt(brushSizeSlider.value, 10) || 8;
+let lastX = 0;
+let lastY = 0;
+const undoStack = [];
+const MAX_UNDO = 25;
+let sessionHistory = [];
+let timerInterval = null;
+let currentGeneratedUrl = '';
+let currentSketchBase64 = '';
+let isComparing = false;
+
+// Initialize Canvas
+function initCanvas() {
+  canvas.width = 512;
+  canvas.height = 512;
+  fillCanvasBackground(currentBgColor);
+  saveCanvasState();
+}
+
+function fillCanvasBackground(color) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
+
+function saveCanvasState() {
+  if (undoStack.length >= MAX_UNDO) {
+    undoStack.shift();
+  }
+  undoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+}
+
+function restoreLastCanvasState() {
+  if (undoStack.length > 1) {
+    undoStack.pop(); // Remove current state
+    const previous = undoStack[undoStack.length - 1];
+    ctx.putImageData(previous, 0, 0);
+  } else if (undoStack.length === 1) {
+    ctx.putImageData(undoStack[0], 0, 0);
+  }
+}
+
+// Coordinate Helper (supports responsive scaling & high DPI)
+function getCanvasCoords(e) {
   const rect = canvas.getBoundingClientRect();
-  canvasWidth = rect.width;
-  canvasHeight = rect.height;
-
-  dpr = window.devicePixelRatio || 1;
-  canvas.width = canvasWidth * dpr;
-  canvas.height = canvasHeight * dpr;
-
-  ctx.resetTransform?.();
-  ctx.scale(dpr, dpr);
-}
-
-window.addEventListener('resize', () => {
-  resizeCanvas();
-  // Keep balls within resized viewport
-  balls.forEach(ball => ball.clampToBounds(canvasWidth, canvasHeight));
-});
-
-// --- Color Palette Generator ---
-const PALETTE = [
-  { fill: '#38bdf8', glow: 'rgba(56, 189, 248, 0.4)' },
-  { fill: '#f43f5e', glow: 'rgba(244, 63, 94, 0.4)' },
-  { fill: '#a855f7', glow: 'rgba(168, 85, 247, 0.4)' },
-  { fill: '#22c55e', glow: 'rgba(34, 197, 94, 0.4)' },
-  { fill: '#fbbf24', glow: 'rgba(251, 191, 36, 0.4)' },
-  { fill: '#ec4899', glow: 'rgba(236, 72, 153, 0.4)' },
-  { fill: '#06b6d4', glow: 'rgba(6, 182, 212, 0.4)' },
-  { fill: '#f97316', glow: 'rgba(249, 115, 22, 0.4)' },
-];
-
-function getRandomColor() {
-  return PALETTE[Math.floor(Math.random() * PALETTE.length)];
-}
-
-// --- Ball Class ---
-class Ball {
-  constructor(x, y, radius, vx = 0, vy = 0, colorObj = null) {
-    this.x = x;
-    this.y = y;
-    this.radius = radius;
-    this.vx = vx;
-    this.vy = vy;
-    this.mass = Math.PI * radius * radius; // 2D mass proportional to area
-    this.color = colorObj || getRandomColor();
-    this.history = [];
-    this.maxTrailLength = 10;
-  }
-
-  update(gravity, restitution, airDrag, width, height) {
-    // Save history for motion blur/trail
-    if (controls.trail.checked) {
-      this.history.push({ x: this.x, y: this.y });
-      if (this.history.length > this.maxTrailLength) {
-        this.history.shift();
-      }
-    } else {
-      this.history.length = 0;
-    }
-
-    // Apply gravity
-    this.vy += gravity;
-
-    // Apply air drag
-    this.vx *= airDrag;
-    this.vy *= airDrag;
-
-    // Update position
-    this.x += this.vx;
-    this.y += this.vy;
-
-    // Wall collision checks
-    let hitSpeed = 0;
-
-    // Floor collision
-    if (this.y + this.radius >= height) {
-      hitSpeed = Math.abs(this.vy);
-      this.y = height - this.radius;
-      this.vy = -this.vy * restitution;
-      // Floor rolling friction
-      this.vx *= 0.985;
-
-      // Rest threshold to prevent micro-jittering
-      if (Math.abs(this.vy) < 0.25 && Math.abs(gravity) > 0.01) {
-        this.vy = 0;
-      }
-      if (hitSpeed > 1.5) playBounceSound(hitSpeed, this.radius);
-    }
-    // Ceiling collision
-    else if (this.y - this.radius <= 0) {
-      hitSpeed = Math.abs(this.vy);
-      this.y = this.radius;
-      this.vy = -this.vy * restitution;
-      if (hitSpeed > 1.5) playBounceSound(hitSpeed, this.radius);
-    }
-
-    // Right wall collision
-    if (this.x + this.radius >= width) {
-      hitSpeed = Math.abs(this.vx);
-      this.x = width - this.radius;
-      this.vx = -this.vx * restitution;
-      if (hitSpeed > 1.5) playBounceSound(hitSpeed, this.radius);
-    }
-    // Left wall collision
-    else if (this.x - this.radius <= 0) {
-      hitSpeed = Math.abs(this.vx);
-      this.x = this.radius;
-      this.vx = -this.vx * restitution;
-      if (hitSpeed > 1.5) playBounceSound(hitSpeed, this.radius);
-    }
-  }
-
-  clampToBounds(width, height) {
-    this.x = Math.max(this.radius, Math.min(width - this.radius, this.x));
-    this.y = Math.max(this.radius, Math.min(height - this.radius, this.y));
-  }
-
-  draw(context) {
-    // Render trail if enabled
-    if (controls.trail.checked && this.history.length > 1) {
-      for (let i = 0; i < this.history.length; i++) {
-        const pt = this.history[i];
-        const ratio = (i + 1) / this.history.length;
-        const trailRadius = this.radius * ratio * 0.7;
-
-        context.beginPath();
-        context.arc(pt.x, pt.y, Math.max(1, trailRadius), 0, Math.PI * 2);
-        context.fillStyle = this.color.fill;
-        context.globalAlpha = ratio * 0.25;
-        context.fill();
-      }
-      context.globalAlpha = 1.0;
-    }
-
-    // Outer glow
-    context.save();
-    context.shadowColor = this.color.glow;
-    context.shadowBlur = 12;
-
-    // Ball body with radial highlight
-    context.beginPath();
-    context.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-
-    const grad = context.createRadialGradient(
-      this.x - this.radius * 0.3,
-      this.y - this.radius * 0.3,
-      this.radius * 0.1,
-      this.x,
-      this.y,
-      this.radius
-    );
-    grad.addColorStop(0, '#ffffff');
-    grad.addColorStop(0.3, this.color.fill);
-    grad.addColorStop(1, '#0f172a');
-
-    context.fillStyle = grad;
-    context.fill();
-
-    // Subtle rim stroke
-    context.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-    context.lineWidth = 1.5;
-    context.stroke();
-    context.restore();
-  }
-}
-
-// --- Ball-on-Ball Elastic Collision Resolver ---
-function resolveCollisions(ballList) {
-  if (!controls.collision.checked) return;
-
-  const count = ballList.length;
-  for (let i = 0; i < count; i++) {
-    const b1 = ballList[i];
-    for (let j = i + 1; j < count; j++) {
-      const b2 = ballList[j];
-
-      const dx = b2.x - b1.x;
-      const dy = b2.y - b1.y;
-      const distSq = dx * dx + dy * dy;
-      const minDist = b1.radius + b2.radius;
-
-      if (distSq < minDist * minDist && distSq > 0) {
-        const dist = Math.sqrt(distSq);
-
-        // 1. Position Resolution (Separate overlapping balls)
-        const overlap = (minDist - dist);
-        const nx = dx / dist; // Unit normal vector
-        const ny = dy / dist;
-
-        const totalMass = b1.mass + b2.mass;
-        const m1Ratio = b2.mass / totalMass;
-        const m2Ratio = b1.mass / totalMass;
-
-        b1.x -= nx * overlap * m1Ratio;
-        b1.y -= ny * overlap * m1Ratio;
-        b2.x += nx * overlap * m2Ratio;
-        b2.y += ny * overlap * m2Ratio;
-
-        // 2. Velocity Resolution (1D elastic collision along normal)
-        // Tangent vector
-        const tx = -ny;
-        const ty = nx;
-
-        // Dot product velocities with normal & tangent
-        const v1n = b1.vx * nx + b1.vy * ny;
-        const v1t = b1.vx * tx + b1.vy * ty;
-        const v2n = b2.vx * nx + b2.vy * ny;
-        const v2t = b2.vx * tx + b2.vy * ty;
-
-        // Only collide if moving towards each other
-        if (v1n - v2n > 0) {
-          const restitution = parseFloat(controls.restitution.value);
-
-          // 1D momentum conservation with coefficient of restitution
-          const v1nPost = (v1n * (b1.mass - b2.mass) + (1 + restitution) * b2.mass * v2n) / totalMass;
-          const v2nPost = (v2n * (b2.mass - b1.mass) + (1 + restitution) * b1.mass * v1n) / totalMass;
-
-          // Recombine normal and unchanged tangential velocities
-          b1.vx = v1nPost * nx + v1t * tx;
-          b1.vy = v1nPost * ny + v1t * ty;
-          b2.vx = v2nPost * nx + v2t * tx;
-          b2.vy = v2nPost * ny + v2t * ty;
-
-          const relativeSpeed = Math.abs(v1n - v2n);
-          if (relativeSpeed > 1.5) {
-            playBounceSound(relativeSpeed, (b1.radius + b2.radius) / 2);
-          }
-        }
-      }
-    }
-  }
-}
-
-// --- Simulation State ---
-const balls = [];
-
-function spawnBall(x, y, vx = 0, vy = 0, customRadius = null) {
-  const radius = customRadius || parseFloat(controls.ballRadius.value);
-  const clampedX = Math.max(radius, Math.min(canvasWidth - radius, x));
-  const clampedY = Math.max(radius, Math.min(canvasHeight - radius, y));
-  const newBall = new Ball(clampedX, clampedY, radius, vx, vy);
-  balls.push(newBall);
-  updateBallBadge();
-}
-
-function updateBallBadge() {
-  controls.ballCountBadge.textContent = `Balls: ${balls.length}`;
-}
-
-// --- Interactive Mouse & Touch Input ---
-let isInteracting = false;
-let startPos = { x: 0, y: 0 };
-let currentPos = { x: 0, y: 0 };
-let grabbedBall = null;
-let lastGrabbedPositions = [];
-
-function getCanvasCoordinates(e) {
-  const rect = canvas.getBoundingClientRect();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
   return {
-    x: clientX - rect.left,
-    y: clientY - rect.top
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
   };
 }
 
-function handlePointerDown(e) {
+// Drawing Event Handlers
+function startStroke(e) {
   e.preventDefault();
-  getAudioContext(); // Resume audio on first user gesture
+  isDrawing = true;
+  canvasOverlayHint.classList.add('hidden');
 
-  const pos = getCanvasCoordinates(e);
-  startPos = { ...pos };
-  currentPos = { ...pos };
-  isInteracting = true;
+  const coords = getCanvasCoords(e);
+  lastX = coords.x;
+  lastY = coords.y;
 
-  // Check if clicked an existing ball
-  grabbedBall = null;
-  for (let i = balls.length - 1; i >= 0; i--) {
-    const b = balls[i];
-    const dx = pos.x - b.x;
-    const dy = pos.y - b.y;
-    if (dx * dx + dy * dy <= b.radius * b.radius) {
-      grabbedBall = b;
-      grabbedBall.vx = 0;
-      grabbedBall.vy = 0;
-      lastGrabbedPositions = [{ x: b.x, y: b.y, time: performance.now() }];
-      break;
-    }
-  }
+  // Single dot support on click/tap
+  ctx.beginPath();
+  ctx.arc(lastX, lastY, (currentTool === 'eraser' ? brushSize * 1.5 : brushSize) / 2, 0, Math.PI * 2);
+  ctx.fillStyle = currentTool === 'eraser' ? currentBgColor : currentColor;
+  ctx.fill();
 }
 
-function handlePointerMove(e) {
-  if (!isInteracting) return;
-  currentPos = getCanvasCoordinates(e);
+function drawStroke(e) {
+  if (!isDrawing) return;
+  e.preventDefault();
 
-  if (grabbedBall) {
-    grabbedBall.x = Math.max(grabbedBall.radius, Math.min(canvasWidth - grabbedBall.radius, currentPos.x));
-    grabbedBall.y = Math.max(grabbedBall.radius, Math.min(canvasHeight - grabbedBall.radius, currentPos.y));
+  const coords = getCanvasCoords(e);
 
-    // Track fling velocity
-    const now = performance.now();
-    lastGrabbedPositions.push({ x: grabbedBall.x, y: grabbedBall.y, time: now });
-    if (lastGrabbedPositions.length > 5) lastGrabbedPositions.shift();
-  }
-}
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(coords.x, coords.y);
 
-function handlePointerUp(e) {
-  if (!isInteracting) return;
-  isInteracting = false;
-
-  if (grabbedBall) {
-    // Compute throw fling velocity
-    if (lastGrabbedPositions.length >= 2) {
-      const first = lastGrabbedPositions[0];
-      const last = lastGrabbedPositions[lastGrabbedPositions.length - 1];
-      const dt = (last.time - first.time) / 1000;
-      if (dt > 0.01) {
-        grabbedBall.vx = Math.min(Math.max((last.x - first.x) / (dt * 60), -35), 35);
-        grabbedBall.vy = Math.min(Math.max((last.y - first.y) / (dt * 60), -35), 35);
-      }
-    }
-    grabbedBall = null;
-    lastGrabbedPositions = [];
+  if (currentTool === 'eraser') {
+    ctx.strokeStyle = currentBgColor;
+    ctx.lineWidth = brushSize * 2.2;
   } else {
-    // Slingshot / Launcher
-    const dx = startPos.x - currentPos.x;
-    const dy = startPos.y - currentPos.y;
-    const dragDistance = Math.hypot(dx, dy);
+    ctx.strokeStyle = currentColor;
+    ctx.lineWidth = brushSize;
+  }
 
-    if (dragDistance > 8) {
-      // Slingshot launch velocity proportional to pull vector
-      const launchVx = (startPos.x - currentPos.x) * 0.18;
-      const launchVy = (startPos.y - currentPos.y) * 0.18;
-      spawnBall(startPos.x, startPos.y, launchVx, launchVy);
-    } else {
-      // Just a click: spawn a stationary or gentle random drift ball
-      const randomVx = (Math.random() - 0.5) * 4;
-      const randomVy = (Math.random() - 0.5) * 4;
-      spawnBall(startPos.x, startPos.y, randomVx, randomVy);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  lastX = coords.x;
+  lastY = coords.y;
+}
+
+function finishStroke(e) {
+  if (!isDrawing) return;
+  isDrawing = false;
+  saveCanvasState();
+}
+
+canvas.addEventListener('pointerdown', startStroke);
+canvas.addEventListener('pointermove', drawStroke);
+canvas.addEventListener('pointerup', finishStroke);
+canvas.addEventListener('pointercancel', finishStroke);
+canvas.addEventListener('pointerleave', finishStroke);
+
+// --- Drawing Toolbar Actions ---
+undoBtn.addEventListener('click', restoreLastCanvasState);
+
+clearBtn.addEventListener('click', () => {
+  fillCanvasBackground(currentBgColor);
+  saveCanvasState();
+  canvasOverlayHint.classList.remove('hidden');
+});
+
+penTool.addEventListener('click', () => {
+  currentTool = 'pen';
+  penTool.classList.add('active');
+  eraserTool.classList.remove('active');
+});
+
+eraserTool.addEventListener('click', () => {
+  currentTool = 'eraser';
+  eraserTool.classList.add('active');
+  penTool.classList.remove('active');
+});
+
+brushSizeSlider.addEventListener('input', () => {
+  brushSize = parseInt(brushSizeSlider.value, 10);
+  brushSizeVal.textContent = `${brushSize}px`;
+});
+
+// Color Swatches
+document.querySelectorAll('.color-swatch').forEach((swatch) => {
+  swatch.addEventListener('click', () => {
+    document.querySelectorAll('.color-swatch').forEach((s) => s.classList.remove('active'));
+    swatch.classList.add('active');
+    currentColor = swatch.dataset.color;
+    customColorPicker.value = currentColor;
+
+    // Auto-switch to pen if eraser was active
+    if (currentTool === 'eraser') {
+      currentTool = 'pen';
+      penTool.classList.add('active');
+      eraserTool.classList.remove('active');
     }
+  });
+});
+
+customColorPicker.addEventListener('input', (e) => {
+  currentColor = e.target.value;
+  document.querySelectorAll('.color-swatch').forEach((s) => s.classList.remove('active'));
+  if (currentTool === 'eraser') {
+    currentTool = 'pen';
+    penTool.classList.add('active');
+    eraserTool.classList.remove('active');
+  }
+});
+
+// Canvas Background Inversion
+colorModeBtn.addEventListener('click', () => {
+  invertCanvas();
+  saveCanvasState();
+});
+
+function invertCanvas() {
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = 255 - d[i];       // R
+    d[i + 1] = 255 - d[i + 1]; // G
+    d[i + 2] = 255 - d[i + 2]; // B
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  currentBgColor = currentBgColor === '#ffffff' ? '#000000' : '#ffffff';
+  document.getElementById('canvasBox').style.background = currentBgColor;
+
+  // Invert current drawing color if it matches the background
+  if (currentColor === '#000000' && currentBgColor === '#000000') {
+    currentColor = '#ffffff';
+  } else if (currentColor === '#ffffff' && currentBgColor === '#ffffff') {
+    currentColor = '#000000';
   }
 }
 
-canvas.addEventListener('mousedown', handlePointerDown);
-window.addEventListener('mousemove', handlePointerMove);
-window.addEventListener('mouseup', handlePointerUp);
-
-canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
-window.addEventListener('touchmove', handlePointerMove, { passive: false });
-window.addEventListener('touchend', handlePointerUp, { passive: false });
-
-// --- Button Actions ---
-controls.addBallBtn.addEventListener('click', () => {
-  const r = parseFloat(controls.ballRadius.value);
-  const x = Math.random() * (canvasWidth - 2 * r) + r;
-  const y = r + 20;
-  const vx = (Math.random() - 0.5) * 10;
-  const vy = Math.random() * 2;
-  spawnBall(x, y, vx, vy, r);
-});
-
-controls.burstBtn.addEventListener('click', () => {
-  const count = 10;
-  const centerX = canvasWidth / 2;
-  const centerY = canvasHeight / 3;
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2;
-    const speed = 6 + Math.random() * 10;
-    const r = Math.floor(12 + Math.random() * 18);
-    spawnBall(
-      centerX + Math.cos(angle) * 15,
-      centerY + Math.sin(angle) * 15,
-      Math.cos(angle) * speed,
-      Math.sin(angle) * speed,
-      r
-    );
-  }
-});
-
-controls.clearBtn.addEventListener('click', () => {
-  balls.length = 0;
-  updateBallBadge();
-});
-
-// --- Presets ---
-const PRESETS = {
-  earth: {
-    gravity: 0.45,
-    restitution: 0.8,
-    friction: 0.999,
-    ballsCount: 3
+// --- Preset Scribbles ---
+const PRESET_SCRIBBLES = {
+  cat: (c) => {
+    c.beginPath();
+    c.arc(256, 270, 110, 0, Math.PI * 2);
+    // Ears
+    c.moveTo(170, 200); c.lineTo(150, 100); c.lineTo(220, 170);
+    c.moveTo(290, 170); c.lineTo(360, 100); c.lineTo(340, 200);
+    // Eyes
+    c.moveTo(200, 250); c.arc(210, 250, 12, 0, Math.PI * 2);
+    c.moveTo(290, 250); c.arc(300, 250, 12, 0, Math.PI * 2);
+    // Nose & mouth
+    c.moveTo(250, 280); c.lineTo(262, 280); c.lineTo(256, 290); c.closePath();
+    c.moveTo(256, 290); c.quadraticCurveTo(240, 315, 220, 305);
+    c.moveTo(256, 290); c.quadraticCurveTo(272, 315, 292, 305);
+    // Whiskers
+    c.moveTo(180, 280); c.lineTo(100, 270);
+    c.moveTo(180, 290); c.lineTo(95, 295);
+    c.moveTo(330, 280); c.lineTo(410, 270);
+    c.moveTo(330, 290); c.lineTo(415, 295);
+    c.stroke();
   },
-  space: {
-    gravity: 0.0,
-    restitution: 0.98,
-    friction: 1.0,
-    ballsCount: 5
+  house: (c) => {
+    c.beginPath();
+    c.strokeRect(150, 240, 210, 180);
+    c.moveTo(130, 240); c.lineTo(255, 130); c.lineTo(380, 240); c.closePath();
+    c.strokeRect(225, 320, 60, 100);
+    c.strokeRect(175, 270, 45, 45);
+    c.moveTo(197, 270); c.lineTo(197, 315);
+    c.moveTo(175, 292); c.lineTo(220, 292);
+    c.strokeRect(310, 150, 30, 50);
+    c.moveTo(325, 140); c.quadraticCurveTo(340, 110, 325, 90);
+    c.quadraticCurveTo(310, 70, 335, 50);
+    c.stroke();
   },
-  superball: {
-    gravity: 0.45,
-    restitution: 0.98,
-    friction: 0.9995,
-    ballsCount: 4
+  boat: (c) => {
+    c.beginPath();
+    c.moveTo(120, 340); c.lineTo(390, 340);
+    c.lineTo(340, 410); c.lineTo(170, 410); c.closePath();
+    c.moveTo(256, 340); c.lineTo(256, 120);
+    c.moveTo(256, 130); c.lineTo(360, 310); c.lineTo(256, 310); c.closePath();
+    c.moveTo(246, 150); c.lineTo(160, 310); c.lineTo(246, 310); c.closePath();
+    c.moveTo(80, 430); c.quadraticCurveTo(140, 410, 200, 430);
+    c.quadraticCurveTo(260, 450, 320, 430);
+    c.quadraticCurveTo(380, 410, 440, 430);
+    c.stroke();
   },
-  chaos: {
-    gravity: 0.5,
-    restitution: 0.92,
-    friction: 0.999,
-    ballsCount: 20
+  car: (c) => {
+    c.beginPath();
+    c.moveTo(90, 320); c.lineTo(140, 320);
+    c.quadraticCurveTo(180, 240, 240, 230);
+    c.lineTo(340, 230);
+    c.quadraticCurveTo(380, 250, 430, 310);
+    c.lineTo(445, 340); c.lineTo(90, 340); c.closePath();
+    c.moveTo(240, 240); c.lineTo(330, 240); c.lineTo(325, 290); c.lineTo(235, 290); c.closePath();
+    c.moveTo(140, 340); c.arc(170, 345, 32, 0, Math.PI * 2);
+    c.moveTo(330, 340); c.arc(360, 345, 32, 0, Math.PI * 2);
+    c.moveTo(60, 380); c.lineTo(470, 380);
+    c.stroke();
+  },
+  tree: (c) => {
+    c.beginPath();
+    c.moveTo(240, 440); c.quadraticCurveTo(250, 340, 230, 270);
+    c.moveTo(270, 440); c.quadraticCurveTo(265, 340, 280, 270);
+    c.moveTo(150, 240); c.arc(190, 220, 50, 0, Math.PI * 2);
+    c.moveTo(230, 180); c.arc(260, 170, 60, 0, Math.PI * 2);
+    c.moveTo(300, 220); c.arc(330, 210, 55, 0, Math.PI * 2);
+    c.moveTo(200, 270); c.arc(260, 250, 55, 0, Math.PI * 2);
+    c.strokeRect(210, 440, 90, 35);
+    c.stroke();
+  },
+  rocket: (c) => {
+    c.beginPath();
+    // Rocket fuselage
+    c.moveTo(256, 110);
+    c.quadraticCurveTo(210, 190, 215, 330);
+    c.lineTo(297, 330);
+    c.quadraticCurveTo(302, 190, 256, 110);
+    // Fins
+    c.moveTo(215, 300); c.lineTo(165, 360); c.lineTo(215, 345);
+    c.moveTo(297, 300); c.lineTo(347, 360); c.lineTo(297, 345);
+    // Window
+    c.moveTo(256, 200); c.arc(256, 215, 22, 0, Math.PI * 2);
+    // Exhaust flames
+    c.moveTo(230, 345); c.lineTo(256, 410); c.lineTo(282, 345);
+    c.stroke();
+  },
+  coffee: (c) => {
+    c.beginPath();
+    // Mug body
+    c.moveTo(180, 230);
+    c.lineTo(190, 370);
+    c.quadraticCurveTo(256, 390, 322, 370);
+    c.lineTo(332, 230);
+    c.closePath();
+    // Handle
+    c.moveTo(330, 260);
+    c.quadraticCurveTo(395, 270, 390, 330);
+    c.quadraticCurveTo(385, 360, 324, 350);
+    // Steam
+    c.moveTo(225, 200); c.quadraticCurveTo(210, 170, 230, 140);
+    c.moveTo(256, 195); c.quadraticCurveTo(270, 160, 250, 130);
+    c.moveTo(285, 200); c.quadraticCurveTo(270, 170, 290, 140);
+    c.stroke();
   }
 };
 
-function applyPreset(name) {
-  const p = PRESETS[name];
-  if (!p) return;
+document.querySelectorAll('.preset-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    const key = chip.dataset.preset;
+    if (PRESET_SCRIBBLES[key]) {
+      fillCanvasBackground(currentBgColor);
+      canvasOverlayHint.classList.add('hidden');
 
-  controls.gravity.value = p.gravity;
-  controls.restitution.value = p.restitution;
-  controls.friction.value = p.friction;
-  updateControlLabels();
-
-  // Reset active button state
-  controls.presetButtons.forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.preset === name);
+      ctx.strokeStyle = currentColor;
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      PRESET_SCRIBBLES[key](ctx);
+      saveCanvasState();
+    }
   });
-
-  // Spawn preset balls
-  balls.length = 0;
-  for (let i = 0; i < p.ballsCount; i++) {
-    const r = 16 + Math.random() * 18;
-    const x = r + Math.random() * (canvasWidth - 2 * r);
-    const y = r + Math.random() * (canvasHeight / 2);
-    const vx = (Math.random() - 0.5) * 14;
-    const vy = (Math.random() - 0.5) * 6;
-    spawnBall(x, y, vx, vy, r);
-  }
-}
-
-controls.presetButtons.forEach(btn => {
-  btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
 });
 
-// --- Render Slingshot Aim Line ---
-function drawAimLine() {
-  if (isInteracting && !grabbedBall) {
-    const dx = startPos.x - currentPos.x;
-    const dy = startPos.y - currentPos.y;
-    const dist = Math.hypot(dx, dy);
-
-    if (dist > 5) {
-      ctx.save();
-      // Line from ball origin to drag point (rubber band)
-      ctx.beginPath();
-      ctx.moveTo(startPos.x, startPos.y);
-      ctx.lineTo(currentPos.x, currentPos.y);
-      ctx.strokeStyle = 'rgba(244, 63, 94, 0.7)';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([5, 5]);
-      ctx.stroke();
-
-      // Forward trajectory guide
-      ctx.beginPath();
-      ctx.moveTo(startPos.x, startPos.y);
-      ctx.lineTo(startPos.x + dx * 1.5, startPos.y + dy * 1.5);
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([]);
-      ctx.stroke();
-
-      // Spawn preview circle
-      const r = parseFloat(controls.ballRadius.value);
-      ctx.beginPath();
-      ctx.arc(startPos.x, startPos.y, r, 0, Math.PI * 2);
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      ctx.restore();
+// --- Style Pills ---
+document.querySelectorAll('.style-pill').forEach((pill) => {
+  pill.addEventListener('click', () => {
+    const style = pill.dataset.style;
+    const current = promptInput ? promptInput.value.trim() : '';
+    if (current && !current.includes(style)) {
+      promptInput.value = `${current}, ${style}`;
+    } else if (!current) {
+      promptInput.value = style;
     }
+    if (promptInput) promptInput.focus();
+  });
+});
+
+// --- Switch Display States ---
+function showResultState(stateEl) {
+  [emptyState, loadingState, imageState, errorState].forEach((el) => {
+    el.classList.remove('active');
+  });
+  stateEl.classList.add('active');
+
+  resultActions.hidden = (stateEl !== imageState);
+}
+
+// Stopwatch Timer
+function startTimer() {
+  let seconds = 0;
+  timerDisplay.textContent = '00:00';
+  clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    seconds++;
+    const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
+    const secs = String(seconds % 60).padStart(2, '0');
+    timerDisplay.textContent = `${mins}:${secs}`;
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+}
+
+// --- Google Nano Banana Inference via ITP Replicate Proxy ---
+async function generateArtwork() {
+  const userPrompt = promptInput ? promptInput.value.trim() : '';
+  
+  // High quality prompt formulation for Nano Banana
+  const finalPrompt = userPrompt || 'Transform this sketch drawing into a vivid, highly detailed, beautifully rendered complete artwork based directly on the shapes, lines, and subjects depicted in the sketch.';
+
+  // Capture current canvas sketch
+  currentSketchBase64 = canvas.toDataURL('image/png');
+  sketchCompareImg.src = currentSketchBase64;
+
+  // Set UI to loading state
+  showResultState(loadingState);
+  loadingStatusText.textContent = 'Packaging sketch & contacting ITP/IMA Proxy...';
+  startTimer();
+  generateBtn.disabled = true;
+  generateBtn.querySelector('.spinner').hidden = false;
+  generateBtn.querySelector('.btn-text').textContent = 'Generating with Nano Banana...';
+
+  try {
+    // Prepare payload adhering to Replicate google/nano-banana schema
+    const payload = {
+      model: settings.model || DEFAULT_SETTINGS.model,
+      input: {
+        prompt: finalPrompt,
+        image_input: [currentSketchBase64],
+        output_format: settings.outputFormat || 'png'
+      }
+    };
+
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+
+    if (settings.authToken && settings.authToken.trim()) {
+      headers['Authorization'] = `Bearer ${settings.authToken.trim()}`;
+    }
+
+    loadingStatusText.textContent = 'Running google/nano-banana on Replicate GPU...';
+
+    // Send request to ITP Proxy
+    const response = await fetch(settings.proxyUrl, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      let errDetail = response.statusText;
+      try {
+        const errJson = await response.json();
+        errDetail = errJson.error || errJson.details || JSON.stringify(errJson);
+      } catch (e) {
+        errDetail = await response.text();
+      }
+      throw new Error(`Proxy error (${response.status}): ${errDetail}`);
+    }
+
+    const result = await response.json();
+    console.log('Replicate Proxy Prediction Result:', result);
+
+    if (result.error) {
+      throw new Error(result.error + (result.details ? `: ${result.details}` : ''));
+    }
+
+    // Extract image URL from output
+    let imageUrl = '';
+    if (typeof result.output === 'string') {
+      imageUrl = result.output;
+    } else if (Array.isArray(result.output) && result.output.length > 0) {
+      imageUrl = result.output[result.output.length - 1];
+    }
+
+    if (!imageUrl) {
+      throw new Error('No output image URL returned by the model prediction.');
+    }
+
+    currentGeneratedUrl = imageUrl;
+    loadingStatusText.textContent = 'Loading generated masterpiece...';
+
+    // Preload image to avoid blank flashing
+    const imgLoader = new Image();
+    imgLoader.crossOrigin = 'anonymous';
+    imgLoader.onload = () => {
+      stopTimer();
+      generatedImg.src = imageUrl;
+      captionPrompt.textContent = userPrompt || 'Synthesized from sketch with google/nano-banana';
+      showResultState(imageState);
+      addToHistory(imageUrl, userPrompt || 'Nano Banana Artwork');
+    };
+    imgLoader.onerror = () => {
+      stopTimer();
+      generatedImg.src = imageUrl;
+      captionPrompt.textContent = userPrompt || 'Synthesized from sketch with google/nano-banana';
+      showResultState(imageState);
+      addToHistory(imageUrl, userPrompt || 'Nano Banana Artwork');
+    };
+    imgLoader.src = imageUrl;
+
+  } catch (err) {
+    console.error('Generation Failed:', err);
+    stopTimer();
+    showResultState(errorState);
+    errorTitle.textContent = 'Generation Failed';
+    errorMessage.textContent = err.message || 'Unknown network or model prediction error.';
+  } finally {
+    generateBtn.disabled = false;
+    generateBtn.querySelector('.spinner').hidden = true;
+    generateBtn.querySelector('.btn-text').textContent = 'Generate With Nano Banana 🍌✨';
   }
 }
 
-// --- Main Animation Loop ---
-let lastFrameTime = performance.now();
-let frameCount = 0;
-let lastFpsUpdate = performance.now();
+generateBtn.addEventListener('click', generateArtwork);
+errorRetryBtn.addEventListener('click', generateArtwork);
 
-function animate(now) {
-  requestAnimationFrame(animate);
-
-  // FPS calculation
-  frameCount++;
-  if (now - lastFpsUpdate >= 500) {
-    const fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
-    controls.fpsBadge.textContent = `FPS: ${fps}`;
-    frameCount = 0;
-    lastFpsUpdate = now;
+// Keyboard Shortcuts: Cmd+Enter / Ctrl+Enter to generate, Cmd+Z to undo
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    generateArtwork();
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    restoreLastCanvasState();
   }
+});
 
-  // Clear canvas
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+// Compare Sketch Button (toggle between AI Artwork and Original Sketch)
+toggleCompareBtn.addEventListener('click', () => {
+  isComparing = !isComparing;
+  if (isComparing) {
+    sketchCompareImg.classList.remove('hidden');
+    toggleCompareBtn.classList.add('active');
+    toggleCompareBtn.textContent = '👁️ Show AI Artwork';
+  } else {
+    sketchCompareImg.classList.add('hidden');
+    toggleCompareBtn.classList.remove('active');
+    toggleCompareBtn.textContent = '👁️ Compare Sketch';
+  }
+});
 
-  // Read current parameters
-  const gravity = parseFloat(controls.gravity.value);
-  const restitution = parseFloat(controls.restitution.value);
-  const friction = parseFloat(controls.friction.value);
+// --- Download & Load to Canvas ---
+downloadBtn.addEventListener('click', async () => {
+  if (!currentGeneratedUrl) return;
+  try {
+    const res = await fetch(currentGeneratedUrl);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nano-banana-art-${Date.now()}.${settings.outputFormat || 'png'}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    window.open(currentGeneratedUrl, '_blank');
+  }
+});
 
-  // Update physics for each ball (skip physics for ball actively held by mouse)
-  balls.forEach(ball => {
-    if (ball !== grabbedBall) {
-      ball.update(gravity, restitution, friction, canvasWidth, canvasHeight);
-    }
+copyToCanvasBtn.addEventListener('click', () => {
+  if (!currentGeneratedUrl) return;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    saveCanvasState();
+    canvasOverlayHint.classList.add('hidden');
+  };
+  img.src = currentGeneratedUrl;
+});
+
+// --- History / Session Gallery ---
+function addToHistory(url, label) {
+  sessionHistory.unshift({ url, label });
+  historyCount.textContent = sessionHistory.length;
+
+  const thumb = document.createElement('img');
+  thumb.src = url;
+  thumb.className = 'history-thumb';
+  thumb.alt = label;
+  thumb.title = label;
+
+  thumb.addEventListener('click', () => {
+    currentGeneratedUrl = url;
+    generatedImg.src = url;
+    captionPrompt.textContent = label;
+    showResultState(imageState);
   });
 
-  // Resolve inter-ball collisions
-  resolveCollisions(balls);
-
-  // Render balls
-  balls.forEach(ball => ball.draw(ctx));
-
-  // Render aiming slingshot
-  drawAimLine();
+  historyGrid.insertBefore(thumb, historyGrid.firstChild);
 }
 
-// Initialize simulation
-resizeCanvas();
-applyPreset('earth');
-requestAnimationFrame(animate);
+// --- Settings Modal Logic ---
+function openSettings() {
+  proxyUrlInput.value = settings.proxyUrl;
+  modelInput.value = settings.model;
+  authTokenInput.value = settings.authToken || '';
+  outputFormatSelect.value = settings.outputFormat || 'png';
+  aspectRatioSelect.value = settings.aspectRatio || '1:1';
+  settingsModal.hidden = false;
+}
 
+function closeSettings() {
+  settingsModal.hidden = true;
+}
+
+function saveSettings() {
+  settings.proxyUrl = proxyUrlInput.value.trim() || DEFAULT_SETTINGS.proxyUrl;
+  settings.model = modelInput.value.trim() || DEFAULT_SETTINGS.model;
+  settings.authToken = authTokenInput.value.trim();
+  settings.outputFormat = outputFormatSelect.value || 'png';
+  settings.aspectRatio = aspectRatioSelect.value || '1:1';
+
+  try {
+    localStorage.setItem('nano_banana_settings', JSON.stringify(settings));
+  } catch (e) {
+    console.warn('Could not save settings to localStorage', e);
+  }
+
+  closeSettings();
+}
+
+function resetSettings() {
+  settings = { ...DEFAULT_SETTINGS };
+  proxyUrlInput.value = settings.proxyUrl;
+  modelInput.value = settings.model;
+  authTokenInput.value = '';
+  outputFormatSelect.value = settings.outputFormat;
+  aspectRatioSelect.value = settings.aspectRatio;
+
+  try {
+    localStorage.removeItem('nano_banana_settings');
+  } catch (e) {}
+}
+
+openSettingsBtn.addEventListener('click', openSettings);
+closeSettingsBtn.addEventListener('click', closeSettings);
+saveSettingsBtn.addEventListener('click', saveSettings);
+resetSettingsBtn.addEventListener('click', resetSettings);
+
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) closeSettings();
+});
+
+// Initialize on page load
+initCanvas();

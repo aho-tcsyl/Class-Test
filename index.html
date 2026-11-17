@@ -3,115 +3,251 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bouncing Ball Physics Simulation</title>
+  <title>Scribble to Image AI &bull; Google Nano Banana</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="app-container">
-    <header class="header">
-      <div class="logo">
-        <span class="icon">⚡</span>
-        <h1>Bouncing Ball Simulator</h1>
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">🍌</span>
+        <div>
+          <h1>Scribble to Image AI</h1>
+          <p class="subtitle">Sketch a drawing &amp; produce an image using <code>google/nano-banana</code> via NYU ITP/IMA Proxy</p>
+        </div>
       </div>
-      <p class="subtitle">Interactive 2D Physics Engine with Gravity, Elastic Collisions &amp; Momentum</p>
+      <div class="header-actions">
+        <div class="badge model-badge" title="Model: google/nano-banana">
+          <span class="status-dot banana-dot"></span> google/nano-banana
+        </div>
+        <div class="badge proxy-badge" title="Routing via ITP/IMA Replicate Proxy">
+          <span class="status-dot"></span> ITP Proxy
+        </div>
+        <a href="Generative/" class="btn-tool" style="text-decoration:none" title="Generative Art Simulation">🎨 Generative</a>
+        <a href="Bouncing-Ball/" class="btn-tool" style="text-decoration:none" title="Bouncing Ball Simulation">⚡ Bouncing Ball</a>
+        <button id="openSettingsBtn" class="btn btn-secondary icon-btn" title="API &amp; Model Settings">
+          ⚙️ Settings
+        </button>
+      </div>
     </header>
 
-    <main class="main-content">
-      <!-- Canvas Viewport -->
-      <div class="canvas-wrapper">
-        <canvas id="simCanvas"></canvas>
-        <div class="canvas-overlay">
-          <span class="badge" id="ballCountBadge">Balls: 0</span>
-          <span class="badge" id="fpsBadge">FPS: 60</span>
-        </div>
-        <div class="instructions-hint">
-          <span>💡 <strong>Click &amp; Drag</strong> to launch a ball &bull; <strong>Click</strong> to spawn &bull; <strong>Drag</strong> any ball to grab</span>
-        </div>
-      </div>
-
-      <!-- Controls Panel -->
-      <aside class="control-panel">
-        <div class="panel-section">
-          <h2>Presets</h2>
-          <div class="preset-grid">
-            <button class="btn btn-preset" data-preset="earth">🌍 Earth</button>
-            <button class="btn btn-preset" data-preset="space">🚀 Zero-G</button>
-            <button class="btn btn-preset" data-preset="superball">🎾 Superball</button>
-            <button class="btn btn-preset" data-preset="chaos">💥 Chaos (20)</button>
+    <!-- Main Workspace -->
+    <main class="workspace">
+      <!-- Left: Scribble Studio -->
+      <section class="panel studio-panel">
+        <div class="panel-header">
+          <h2>Draw Your Sketch</h2>
+          <div class="canvas-actions">
+            <button id="undoBtn" class="btn-tool" title="Undo (Ctrl+Z / Cmd+Z)">↩ Undo</button>
+            <button id="clearBtn" class="btn-tool" title="Clear Canvas">🗑 Clear</button>
           </div>
         </div>
 
-        <div class="panel-section">
-          <h2>Physics Controls</h2>
-          
-          <div class="control-group">
-            <div class="label-row">
-              <label for="gravity">Gravity (g)</label>
-              <span class="value-display" id="gravityVal">0.45</span>
+        <!-- Canvas Container -->
+        <div class="canvas-box" id="canvasBox">
+          <canvas id="paintCanvas" width="512" height="512"></canvas>
+          <div id="canvasOverlayHint" class="canvas-hint">Scribble anything here...</div>
+        </div>
+
+        <!-- Drawing Toolbar -->
+        <div class="drawing-tools">
+          <div class="tool-group">
+            <button id="penTool" class="tool-btn active" data-tool="pen" title="Pen Tool">✏️ Pen</button>
+            <button id="eraserTool" class="tool-btn" data-tool="eraser" title="Eraser Tool">🧹 Eraser</button>
+          </div>
+
+          <div class="tool-group size-group">
+            <label for="brushSize">Size:</label>
+            <input type="range" id="brushSize" min="2" max="36" value="8" />
+            <span id="brushSizeVal" class="val-tag">8px</span>
+          </div>
+
+          <div class="tool-group color-group">
+            <label>Color:</label>
+            <div class="palette-swatches">
+              <button class="color-swatch active" data-color="#000000" style="background:#000000" title="Black"></button>
+              <button class="color-swatch" data-color="#ffffff" style="background:#ffffff; border:1px solid #64748b" title="White"></button>
+              <button class="color-swatch" data-color="#ef4444" style="background:#ef4444" title="Red"></button>
+              <button class="color-swatch" data-color="#3b82f6" style="background:#3b82f6" title="Blue"></button>
+              <button class="color-swatch" data-color="#10b981" style="background:#10b981" title="Green"></button>
+              <button class="color-swatch" data-color="#f59e0b" style="background:#f59e0b" title="Yellow"></button>
+              <button class="color-swatch" data-color="#8b5cf6" style="background:#8b5cf6" title="Purple"></button>
+              <input type="color" id="customColorPicker" value="#000000" title="Custom Color Picker" />
             </div>
-            <input type="range" id="gravity" min="0" max="1.5" step="0.05" value="0.45" />
-          </div>
-
-          <div class="control-group">
-            <div class="label-row">
-              <label for="restitution">Restitution (Bounce)</label>
-              <span class="value-display" id="restitutionVal">0.80</span>
-            </div>
-            <input type="range" id="restitution" min="0.1" max="1.0" step="0.02" value="0.8" />
-          </div>
-
-          <div class="control-group">
-            <div class="label-row">
-              <label for="friction">Air Resistance / Drag</label>
-              <span class="value-display" id="frictionVal">0.999</span>
-            </div>
-            <input type="range" id="friction" min="0.95" max="1.0" step="0.001" value="0.999" />
-          </div>
-
-          <div class="control-group">
-            <div class="label-row">
-              <label for="ballRadius">Default Ball Size</label>
-              <span class="value-display" id="ballRadiusVal">22 px</span>
-            </div>
-            <input type="range" id="ballRadius" min="10" max="50" step="2" value="22" />
+            <button id="colorModeBtn" class="btn-pill" title="Toggle Canvas Canvas Background (White / Black)">
+              Invert BG
+            </button>
           </div>
         </div>
 
-        <div class="panel-section">
-          <h2>Options</h2>
-          <div class="toggle-group">
-            <label class="toggle-switch">
-              <input type="checkbox" id="trailToggle" checked />
-              <span class="toggle-slider"></span>
-              <span class="toggle-label">Motion Trails</span>
-            </label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="collisionToggle" checked />
-              <span class="toggle-slider"></span>
-              <span class="toggle-label">Ball Collisions</span>
-            </label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="soundToggle" checked />
-              <span class="toggle-slider"></span>
-              <span class="toggle-label">Bounce Audio (Synth)</span>
-            </label>
+        <!-- Quick Preset Scribbles -->
+        <div class="presets-bar">
+          <span class="bar-label">Try a Preset:</span>
+          <button class="preset-chip" data-preset="cat">🐱 Cat</button>
+          <button class="preset-chip" data-preset="house">🏠 House</button>
+          <button class="preset-chip" data-preset="boat">⛵ Sailboat</button>
+          <button class="preset-chip" data-preset="car">🚗 Car</button>
+          <button class="preset-chip" data-preset="tree">🌳 Tree</button>
+          <button class="preset-chip" data-preset="rocket">🚀 Rocket</button>
+          <button class="preset-chip" data-preset="coffee">☕ Coffee</button>
+        </div>
+
+        <!-- Prompt and Style Controls -->
+        <div class="prompt-box">
+          <div class="prompt-input-row">
+            <input
+              type="text"
+              id="promptInput"
+              placeholder="Prompt or style description (e.g. 'A cute watercolor cat', 'Cyberpunk neon city')..."
+            />
+          </div>
+          <div class="style-tags">
+            <span class="tag-label">Styles:</span>
+            <button class="style-pill" data-style="photorealistic, 8k highly detailed portrait">📸 Photo</button>
+            <button class="style-pill" data-style="classic oil painting, textured brushstrokes">🎨 Oil Painting</button>
+            <button class="style-pill" data-style="cyberpunk aesthetic, vibrant glowing neon lights">🌌 Cyberpunk</button>
+            <button class="style-pill" data-style="Studio Ghibli anime style, lush scenery">✨ Anime</button>
+            <button class="style-pill" data-style="3D Pixar animation character render">🧸 3D Pixar</button>
+            <button class="style-pill" data-style="soft ethereal watercolor painting on paper">🖌️ Watercolor</button>
+            <button class="style-pill" data-style="epic fantasy concept art, cinematic lighting">🐉 Fantasy</button>
           </div>
         </div>
 
-        <div class="panel-section actions">
-          <button class="btn btn-primary" id="addBallBtn">+ Spawn Ball</button>
-          <button class="btn btn-secondary" id="burstBtn">✨ Burst (10)</button>
-          <button class="btn btn-danger" id="clearBtn">🗑️ Clear All</button>
+        <!-- Primary Action -->
+        <div class="action-box">
+          <button id="generateBtn" class="btn btn-primary generate-btn full-width">
+            <span class="btn-text">Generate With Nano Banana 🍌✨</span>
+            <span class="spinner" hidden></span>
+          </button>
+          <div class="prompt-hint-note">
+            💡 If no prompt is provided, Nano Banana will automatically synthesize a complete artwork guided by your sketch!
+          </div>
         </div>
-      </aside>
+      </section>
+
+      <!-- Right: AI Result Darkroom -->
+      <section class="panel result-panel">
+        <div class="panel-header">
+          <h2>Generated Artwork</h2>
+          <div class="result-actions" id="resultActions" hidden>
+            <button id="toggleCompareBtn" class="btn-tool" title="Hold or toggle to compare with original sketch">👁️ Compare Sketch</button>
+            <button id="downloadBtn" class="btn-tool" title="Save Generated Image">💾 Save Image</button>
+            <button id="copyToCanvasBtn" class="btn-tool" title="Draw over this image on canvas">🔄 Load to Canvas</button>
+          </div>
+        </div>
+
+        <div class="result-display-wrapper" id="resultWrapper">
+          <!-- Empty State Placeholder -->
+          <div id="emptyState" class="result-state active">
+            <div class="placeholder-icon">🍌</div>
+            <h3>Your Artwork Awaits</h3>
+            <p>Draw a sketch on the left and click <strong>Generate With Nano Banana</strong>.</p>
+            <div class="workflow-steps">
+              <span>1. Sketch</span> &rarr; 
+              <span>2. Optional Prompt</span> &rarr; 
+              <span>3. Nano Banana AI</span>
+            </div>
+          </div>
+
+          <!-- Loading State -->
+          <div id="loadingState" class="result-state">
+            <div class="pulsing-orbit">
+              <div class="orbit-ball"></div>
+            </div>
+            <h3>Generating Artwork...</h3>
+            <p id="loadingStatusText">Contacting ITP/IMA Replicate Proxy...</p>
+            <div class="timer-display" id="timerDisplay">00:00</div>
+            <p class="sub-hint">Running <code>google/nano-banana</code> on Replicate GPU. Usually takes 6–12 seconds.</p>
+          </div>
+
+          <!-- Generated Image View -->
+          <div id="imageState" class="result-state">
+            <div class="image-viewer" id="imageViewer">
+              <img id="generatedImg" alt="Generated Artwork" />
+              <img id="sketchCompareImg" alt="Original Sketch" class="compare-overlay hidden" />
+            </div>
+            <div class="image-caption">
+              <p id="captionPrompt" class="caption-text"></p>
+            </div>
+          </div>
+
+          <!-- Error State -->
+          <div id="errorState" class="result-state">
+            <div class="error-icon">⚠️</div>
+            <h3 id="errorTitle">Generation Error</h3>
+            <p id="errorMessage" class="error-msg"></p>
+            <button id="errorRetryBtn" class="btn btn-secondary">Try Again</button>
+          </div>
+        </div>
+
+        <!-- History / Session Gallery -->
+        <div class="history-section">
+          <h3>Session Gallery (<span id="historyCount">0</span>)</h3>
+          <div id="historyGrid" class="history-grid">
+            <!-- Thumbnails injected via JS -->
+          </div>
+        </div>
+      </section>
     </main>
 
-    <footer class="footer">
-      <span>Built with HTML5 Canvas &bull; Web Audio API &bull; 60 FPS Physics Engine</span>
-    </footer>
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal-backdrop" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>⚙️ Proxy &amp; Model Settings</h3>
+          <button id="closeSettingsBtn" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="proxyUrlInput">ITP/IMA Proxy Endpoint</label>
+            <input type="text" id="proxyUrlInput" value="https://itp-ima-replicate-proxy.web.app/api/create_n_get" />
+            <span class="help-text">Direct URL used by the browser to reach the Replicate proxy.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="modelInput">Replicate Model Name</label>
+            <input type="text" id="modelInput" value="google/nano-banana" />
+            <span class="help-text">Target model identifier (e.g. <code>google/nano-banana</code> or <code>google/nano-banana-pro</code>).</span>
+          </div>
+
+          <div class="form-group">
+            <label for="authTokenInput">NYU Auth Token <span class="badge-optional">Optional</span></label>
+            <input type="password" id="authTokenInput" placeholder="Paste your bearer token here if you logged into the proxy" />
+            <span class="help-text">
+              Leave blank to use the shared student quota. Or log in at 
+              <a href="https://itp-ima-replicate-proxy.web.app/" target="_blank" rel="noopener">itp-ima-replicate-proxy.web.app</a>
+              with your <code>nyu.edu</code> account and paste your token for up to 500 requests/day.
+            </span>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group half">
+              <label for="outputFormatSelect">Output Format</label>
+              <select id="outputFormatSelect">
+                <option value="png" selected>PNG (Lossless)</option>
+                <option value="jpg">JPG (Smaller file)</option>
+              </select>
+            </div>
+            <div class="form-group half">
+              <label for="aspectRatioSelect">Aspect Ratio</label>
+              <select id="aspectRatioSelect">
+                <option value="1:1" selected>1:1 Square</option>
+                <option value="4:3">4:3 Landscape</option>
+                <option value="16:9">16:9 Widescreen</option>
+                <option value="3:4">3:4 Portrait</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="resetSettingsBtn" class="btn btn-secondary">Restore Defaults</button>
+          <button id="saveSettingsBtn" class="btn btn-primary">Save Settings</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="script.js"></script>
 </body>
 </html>
-
